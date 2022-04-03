@@ -1,0 +1,49 @@
+---
+title: "POC for Age of Empires 2 - dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: scroll
+---
+
+Litt forskjellige tall og figurer med uklar relevans for Age of Empires 2.
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+
+#intro her: https://pkgs.rstudio.com/flexdashboard/articles/using.html#overview
+
+#mulig innhold: 
+##antall spill spilt. antall vunnet. 
+##baner spilt (og vunnet?). 
+##sivilisasjoner spilt. 
+##varighet på spill. uptimes.
+##eapm. 
+```
+
+
+### Hvor mange har vi vunnet?
+
+```{r}
+spill_spilt = 55
+vunnet = 20
+
+gauge(vunnet, min = 0, max = spill_spilt)
+```
+
+> Her ser vi hvor mange av spillene vi har spilt som vi har vunnet. 
+
+
+### Graf 2
+
+```{r}
+
+```
+
+
+### Graf 3
+
+```{r}
+
+```
+
