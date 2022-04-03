@@ -1,0 +1,648 @@
+---
+title: "Age of Empires 2 - analysen"
+output: html_notebook
+---
+
+
+```{r}
+#biblioteker
+library(tidyverse)
+library(httr)
+library(jsonlite)
+library(readxl)
+library(tidytext)
+
+#settings
+tema = theme_set(theme_minimal())
+options(scipen = 99)
+```
+
+# Steg 1 - hent data
+
+For det første henter jeg dataene på spillene vi har spilt sammen. Disse henter jeg manuelt fra et excel-ark. Kunne sikkert gjort noe automatisk her også, men!
+
+```{r}
+#data
+df_spill <- read_excel("data/aoe2_spillanalyse.xlsx", sheet = "raw", 
+                       col_types = c("numeric", "text", "text", "date", "text", "text", "numeric", "text", "numeric"))
+
+```
+
+Så beriker jeg disse dataene med data fra to API-er: aoe2.net og aoe2insights.com
+
+```{r}
+#hvilke data har jeg allerede?
+df_spillere <- read_csv("data/spillerstatistikk.csv",
+                        col_types = cols(spill_id = col_character(), 
+                                         profile_id = col_character(), steam_id = col_character()))
+
+#hvilke spill er det jeg mangler data om spillerne fra aoe2net fra?
+test_aoe2net = select(df_spill, spill_id) %>%
+  anti_join(., select(df_spillere, spill_id))
+
+#henter data fra aoe2.net for de jeg mangler
+
+nye_spillere = data.frame()
+
+for(i in 1:nrow(test_aoe2net)){
+  spill_id = test_aoe2net$spill_id[i]
+  query_result = GET(paste0("https://aoe2.net/api/match?match_id=", spill_id))
+  query_content = fromJSON(content(query_result, "parsed"))
+  temp_spillere = query_content$players
+  temp_spillere$spill_id = spill_id
+  nye_spillere = bind_rows(nye_spillere, temp_spillere)
+  Sys.sleep(5)
+}
+
+#datamanipulering
+#fjerner kolonner som kun er NA
+nye_spillere = select(nye_spillere, spill_id, profile_id, steam_id, name, rating, team, civ, civ_alpha, won)
+
+#legger på en variabel som sier hvor mange spillere i matchen
+nye_spillere = group_by(nye_spillere, spill_id) %>%
+  mutate(antall_spillere_i_match = n())
+
+#prøver å identifisere vårt lag
+#våre ider (pluss sindre 3121935 og en rando 4680950)
+team_ids = c(2176509, 3121935, 4361967, 4250835, 4680950)
+nye_spillere = mutate(nye_spillere,
+                     mitt_lag = ifelse(profile_id %in% team_ids, 1, 2)
+                     )
+
+#beregner gjennomsnittlig ranking
+nye_spillere = group_by(nye_spillere, spill_id, mitt_lag) %>%
+  mutate(
+    average_elo_narm = mean(rating, na.rm = TRUE),
+    average_elo = mean(rating, na.rm = FALSE),
+    profile_id = as.character(profile_id)
+  )
+
+#binder sammen med eksisterende data
+df_spillere = bind_rows(df_spillere, nye_spillere)
+
+#lagrer
+write.csv(df_spillere, "data/spillerstatistikk.csv", row.names = FALSE)
+
+```
+
+```{r}
+
+```{r}
+#for-loopen er ikke spesielt bra
+#det er noe som blokkerer automatisk henting av data her, og gir meg
+#masse 403-feil. om det er en blokk, eller noe i systemet som hindrer
+#er uklart.
+#men å manuelt loade analysen på nettsida, for så å grabbe json-fila herifra virker som at det funker.
+
+#eller er det rett og slett det at når replayene er sletta, så lar det seg ikke lage analyser lenger?
+#på nettsida får jeg en HTTP 404-feil. Så 403 access denied får jeg når den ikke har klart å opprette sida.
+#hvis jeg vil ha alle dataene, må jeg dermed laste opp mine egne lagra recordings og få dem analysert.
+#https://www.aoe2insights.com/analysis/create/
+
+```
+
+
+```{r}
+#test
+#liste filer og sjekke filstørrelse, evt.
+
+test = select(df_spill, spill_id, dato)
+
+existing_files = list.files("data/json") 
+existing_files = str_remove(existing_files, fixed(".json"))
+
+test = filter(test, !(spill_id %in% existing_files))
+
+#henter data
+#manuelt^^
+
+i = 10
+
+create_analysis = GET(paste0("https://www.aoe2insights.com/match/", test$spill_id[i], "/analyze/"))
+
+status_code(create_analysis)
+
+analysis_url = paste0(
+    "https://aoe2insights.s3.amazonaws.com/media/public/matches/analysis/analysis-", 
+    test$spill_id[i],
+    ".json")
+
+query_analysis = GET(analysis_url)
+
+status_code(query_analysis)
+
+analysis_content_json = content(query_analysis, "text")
+
+#lagrer innholdet som JSON, slik at jeg slipper å plage API-et hver gang
+write(analysis_content_json, paste0("data/json/",test$spill_id[i],".json"))
+
+
+```
+
+```{r}
+#sjekk her om alle json-data er konvertert.
+```
+
+```{r}
+#lager nødvendige filer
+#en fil med spillerinfo
+#en fil med apm-info
+
+
+#henter ut data fra filene jeg skal hente data fra
+test = list.files("data/json") 
+
+#endelige datasett
+df_spillere_insight = data.frame()
+df_apm = data.frame()
+df_uptimes = data.frame()
+df_units = data.frame()
+
+#looper igjennom
+for(i in 1:length(test)){
+  spill_id = str_remove(test[i], fixed(".json"))
+  #hva gjør simplify her? usikker på hva den gjør, men størrelsen halveres.
+  analysis_content = read_json(paste0("data/json/", test[i]), simplifyVector = TRUE)
+  #1: info om spillerne
+  df_analysis_content = tibble(player = analysis_content$player)
+  
+  temp_player = hoist(df_analysis_content, player,
+             id = "id",
+             profile_id = "profile_id",
+             name = "name",
+             color = "color",
+             civilization = c("civilization", "label"),
+             civ_id = c("civilization", "id"),
+             team = "team",
+             type = "type"
+             ) %>%
+  select(-player)
+  
+  #steg 1.2 - apm_mean
+  df_analysis_content = tibble(apm = analysis_content$apm$mean)
+  
+  temp_mean_apm = unnest_wider(df_analysis_content, apm) %>%
+    rownames_to_column(var = "id") %>%
+    rename("mean_apm" = 2) %>%
+    mutate(id = parse_number(id))
+  
+  temp_player = left_join(temp_player, temp_mean_apm)
+
+  #steg 1.3 legger på spill_id
+  temp_player =mutate(temp_player,
+    spill_id = spill_id
+  )
+  
+  #steg 1.4 - tar ut spillerne
+  df_spillere_insight = bind_rows(df_spillere_insight, temp_player)
+  
+  #steg 2 - gjennomsnittlig eapm per minute
+  df_analysis_content = tibble(apm = analysis_content$apm$per_minute)
+  
+  temp_apm = unnest_wider(df_analysis_content, apm) %>%
+    rownames_to_column(var = "id")
+  
+  temp_apm = pivot_longer(temp_apm, 2:ncol(temp_apm), names_to = "minute", names_prefix = fixed("..."), values_to = "apm") %>%
+    mutate(
+      minute = parse_number(minute),
+      id = parse_number(id)
+  )
+
+temp_apm = left_join(temp_apm, select(temp_player, id, name, profile_id)) %>%
+  mutate(spill_id = spill_id)
+
+#tar ut apm
+df_apm = bind_rows(df_apm, temp_apm)
+
+  #steg 3 - uptimes
+  df_analysis_content = analysis_content$uptimes[order(names(analysis_content$uptimes))]
+  df_analysis_content = tibble(uptimes = df_analysis_content)
+  #HER FANT JEG EN FEIL! UNNEST_WIDER TAR REKKEFØLGEN SOM ROWNUMBER, IKKE navnet i DFEN
+  #SÅ FOR UPTIMES BLIR DET FEIL - KAN DETR BLI FEIL FOR APM OGSÅ?
+  #BØR SORTES FOR SIKKERHETS SKYLD.
+  temp_uptimes = unnest_wider(df_analysis_content, uptimes) %>%
+    rownames_to_column(var = "id") 
+  
+  if(ncol(temp_uptimes) > 1){
+    temp_uptimes = pivot_longer(temp_uptimes, cols = 2:ncol(temp_uptimes), names_to = "age", 
+                              values_to = "minutes") %>%
+    mutate(
+      id = parse_number(id),
+    #konvertere tidene til minutter, ikke millisekund
+      minutes = (minutes/1000)/60,
+      spill_id = spill_id
+  ) %>%
+    left_join(., select(temp_player, id, name, profile_id))
+
+  #tar ut uptimes
+  df_uptimes = bind_rows(df_uptimes, temp_uptimes)
+  }
+  #steg 4 - queued units (kan bare si hva som er forsøkt bygd, ikke faktisk bygd)
+  df_analysis_content = analysis_content$units
+  
+  #unit_codes først
+  df_analysis_content = tibble(unit_codes = analysis_content$units$units)
+  
+  temp_codes = unnest_wider(data = df_analysis_content, col = unit_codes) %>%
+    separate(., col = iconMask, into = c("url","id"), remove = FALSE, sep = fixed("icons/")) %>%
+    separate(., col = id, into = c("id", "else"), sep = fixed("-mask")) %>%
+    select(id, name) %>%
+    mutate(id = parse_number(id))
+  
+  #queued uits
+  temp_units = analysis_content$units$queued_units
+  temp_units = left_join(temp_units, temp_codes, by = c("unit_type" = "id")) %>%
+    rename(
+      unit_name = name
+    ) %>%
+    mutate(
+    #konvertere tidene til minutter, ikke millisekund
+      minutes = (time/1000)/60 ,
+      spill_id = spill_id
+  ) %>%
+    left_join(., select(temp_player, id, name, profile_id), by = c("player" = "id"))
+  
+  #tar ut units
+  df_units = bind_rows(df_units, temp_units)
+  
+  }
+
+#fjerner overflødige data
+rm(temp_apm, temp_mean_apm, temp_player, temp_uptimes, test_aoe2net, analysis_content, df_analysis_content)
+
+#lagrer endelige df som csv
+
+write.csv2(df_uptimes, "data/uptimes.csv", row.names = FALSE)
+write.csv2(df_spillere_insight, "data/spillerstatistikk_insight.csv", row.names = FALSE)
+write.csv2(df_apm, "data/apm.csv", row.names = FALSE)
+write.csv2(df_units, "data/units.csv", row.names = FALSE)
+
+```
+
+
+
+```{r}
+
+#data
+aoe2_spillanalyse <- read_excel("data/aoe2_spillanalyse.xlsx", 
+                                sheet = "raw", 
+                                col_types = c("numeric","text", "text", "date", "text", "text", "numeric", "text", "numeric"))
+
+aoe2_spillanalyse = 
+  mutate(aoe2_spillanalyse,
+    seier = ifelse(resultat == "seier", 1, 0),
+    varighet_kategori = cut(varighet_min_ingametime, 
+                            breaks = seq(0,max(aoe2_spillanalyse$varighet_min_ingametime)+20, 20))
+  )
+
+#spillerdata
+df_spillere <- read_csv("data/spillerstatistikk.csv",
+                        col_types = cols(spill_id = col_character(),
+                                         profile_id = col_character(), 
+                                         steam_id = col_character()))
+
+df_spillere_insight <- read_delim("data/spillerstatistikk_insight.csv", delim = ";",
+                                           escape_double = FALSE,col_types = cols(id = col_character(), profile_id = col_character(), 
+                                                                                  spill_id = col_character()),
+                                           locale = locale(decimal_mark = ",", grouping_mark = "|"), trim_ws = TRUE)
+
+
+#apm og uptimes
+df_apm <- read_delim("data/apm.csv", delim = ";", escape_double = FALSE, 
+                     col_types = cols(id = col_skip(),
+                                      profile_id = col_character(), 
+                                      spill_id = col_character()),
+                     locale = locale(decimal_mark = ",", grouping_mark = "|"), trim_ws = TRUE)
+
+df_uptimes <- read_delim("data/uptimes.csv", delim = ";", escape_double = FALSE, 
+                         col_types = cols(id = col_skip(),
+                                          spill_id = col_character(), 
+                                          profile_id = col_character()),
+                         locale = locale(decimal_mark = ",", grouping_mark = "|"), trim_ws = TRUE)
+
+#units
+df_units <- read_delim("data/units.csv", delim = ";", escape_double = FALSE, 
+                       col_types = cols(minutes = col_number(),
+                                        spill_id = col_character(), profile_id = col_character()),
+                       trim_ws = TRUE)
+
+
+
+#sjekk om spillerdata finnes for alle spill
+#test = anti_join(aoe2_spillanalyse, df_spillere)
+
+#hvis ikke - last inn 
+
+#bind sammen evt spillerinfo
+
+
+#settings
+tema = theme_set(theme_minimal())
+options(scipen = 99)
+
+```
+
+
+
+
+```{r}
+##KONSOLIDER DATASETTENE TIL DET SOM TRENGS HER
+
+#ett datasett med mest info om spillene
+
+#finner average elo (med na.rm = TRUE, dvs for spillere uten NA)
+df_spillere = group_by(df_spillere, spill_id, mitt_lag) %>%
+  mutate(
+    average_team_elo = mean(rating, na.rm = TRUE),
+  )
+
+temp = select(df_spillere, spill_id, mitt_lag, average_team_elo) %>%
+  distinct(spill_id, mitt_lag, .keep_all = TRUE) %>%
+  mutate(mitt_lag = ifelse(mitt_lag == 1, "mitt_lag", "motstanderlag")) %>%
+  pivot_wider(names_from = mitt_lag, names_prefix = "average_team_elo_", values_from = average_team_elo)
+
+aoe2_spillanalyse = left_join(aoe2_spillanalyse, temp)
+
+#ett datasett med mest info om spillerne
+df_players = select(df_spillere, profile_id, steam_id, name, spill_id, mitt_lag, antall_spillere_i_match, rating, won) %>%
+  full_join(., select(df_spillere_insight, profile_id, spill_id, reserve_name = name, color, civilization, civ_id, type, mean_apm)) %>%
+  left_join(.,select(aoe2_spillanalyse, spill_id, spill_nr, dato))
+
+#fikser "Mitt-lav-variabelen" slik at den er 1 for mitt lag, 0 for ikke mitt lag
+#tar kun med Ola, Erlend og meg her - Grautbakken og Stora Denso utgår.
+
+df_players = mutate(df_players,
+                    mitt_lag = ifelse(profile_id %in% c("2176509", "4361967", "4250835"), 1, 0)
+                    )
+
+
+#UPTIMES
+#legger til info om hvorvidt det er på mitt lag eller ikke
+df_uptimes = mutate(df_uptimes,
+  mitt_lag = ifelse(profile_id %in% c("2176509", "4361967", "4250835"), 1, 0)
+)
+#LEGGER også til dato.
+df_uptimes = left_join(df_uptimes, select(aoe2_spillanalyse, spill_id, spill_nr, dato))
+
+#UNITS
+#gjør det samme her
+df_units = mutate(df_units,
+  mitt_lag = ifelse(profile_id %in% c(2176509, 4361967, 4250835), 1, 0)
+)
+#LEGGER også til dato.
+df_units = left_join(df_units, select(aoe2_spillanalyse, spill_id, spill_nr, dato))
+```
+
+
+# Hvor mange har vi vunnet?
+
+```{r}
+temp = count(aoe2_spillanalyse, resultat)
+
+ggplot(temp) +
+  geom_col(aes(x = resultat, y = n)) +
+  labs(title = "Har vi vunnet?", x = "Resultat", y = "Antall ganger")
+
+```
+
+# Hvilke baner har vi spilt?
+
+```{r}
+temp = count(aoe2_spillanalyse, bane) %>%
+  arrange(desc(n))
+
+ggplot(temp) +
+  geom_col(aes(x = fct_reorder(bane, n), y = as.integer(n))) +
+  labs(title = "Hvilke kart har vi spilt?", x = "Kart", y = "Antall ganger") +
+  coord_flip()
+
+```
+
+# ... hvor vinner vi da?
+
+
+```{r}
+temp = group_by(aoe2_spillanalyse, bane, resultat) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  complete(resultat, bane) %>%
+  group_by(bane) %>%
+  mutate(
+    n = ifelse(is.na(n) == TRUE, 0, n),
+    antall_bane_n = sum(n),
+    andel = round(n / antall_bane_n, 2)*100
+  ) %>%
+  filter(resultat == "seier")
+
+
+ggplot(temp) +
+  geom_col(aes(x = fct_reorder(bane, andel), y = andel)) +
+  labs(title = "Hvilke kart har vi vunnet på?", x = "Kart", y = "Andel seire") +
+  coord_flip()
+
+```
+
+# Hvilke civs liker vi å spille?
+
+```{r}
+temp = filter(df_players, mitt_lag == 1) %>%
+  group_by(name, civilization) %>%
+  summarise(antall = n())
+
+ggplot(data = temp) +
+  geom_col(aes(x = reorder_within(civilization, antall, name), y = antall)) +
+  coord_flip() +
+  scale_x_reordered() +
+  facet_wrap(vars(name), scales = "free_y") +
+  labs(x = "Sivilisasjoner", y = "Antall")
+
+```
+
+
+# Hvor lenge varer spillene våre?
+
+```{r}
+#stolpediagram
+temp = count(aoe2_spillanalyse, varighet_kategori)
+
+ggplot(data = temp, aes(x = varighet_kategori, y = n)) +
+  geom_col() +
+  labs(x = "Varighet i spilltid (minutter)", y = "Antall spill", fill = "Resultat", title = "Antall spill etter varighet")
+
+```
+
+# Seier etter varighet
+
+```{r}
+temp = group_by(aoe2_spillanalyse, resultat, varighet_kategori) %>%
+  summarise(antall = n())
+kombinasjoner = expand(temp, resultat, varighet_kategori) %>%
+  right_join(temp, .) %>%
+  mutate(antall = ifelse(is.na(antall) == TRUE, 0, antall))
+
+ggplot(data = kombinasjoner, aes(x = varighet_kategori, y = antall, fill = resultat)) +
+  geom_col(position = "dodge") +
+  labs(x = "Varighet i spilltid (minutter)", y = "Antall spill", fill = "Resultat", 
+       title = "Antall spill etter varighet og resultat")
+
+ggplot(data = aoe2_spillanalyse, aes(x = varighet_min_ingametime, y = seier)) +
+  geom_point() +
+  geom_smooth() +
+  scale_x_continuous(breaks = seq(0, 240, 20), limits = c(-10, max(aoe2_spillanalyse$varighet_min_ingametime)+10)) +
+  scale_y_continuous(breaks = c(0, 1), limits = c(-0.2, 1.2)) + 
+  labs(x = "Varighet i minutter", y = "Seier eller ikke")
+
+```
+
+# Blir vi bedre?
+
+# Gjennomsnittlig ELO over tid
+
+```{r}
+
+summary(aoe2_spillanalyse$average_team_elo_mitt_lag)
+
+temp = filter(aoe2_spillanalyse, ranked == 1)
+
+ggplot(data = temp, aes(x = dato, y = average_team_elo_mitt_lag)) +
+  geom_point() +
+  geom_smooth() +
+  scale_x_datetime(date_breaks = "6 weeks", limits = c(as.POSIXct("2021-08-16"), as.POSIXct("2022-04-16"))) +
+  labs(title = "Gjennomsnittlig ranked ELO over tid", subtitle = "september 2021 - mars 2022", x = "Dato", y = "Gjennomsnittlig ELO")
+```
+
+# Vår ELO vs. motstanderens ELO
+
+```{r}
+
+ggplot(data = aoe2_spillanalyse, aes(x = average_team_elo_mitt_lag, y = average_team_elo_motstanderlag)) +
+  geom_point(aes(colour = as.factor(resultat)), alpha = 0.9) +
+  geom_abline(intercept = 0, slope = 1) +
+  scale_x_continuous(limits = c(900, 1000)) +
+  scale_y_continuous(limits = c(850, 1100)) +
+  labs(title = "Vår og motstanders ELO", subtitle = "Linje for å markere lik gjennomsnittlig ELO", x = "Vår snitt-ELO", y = "Motstanders snitt-ELO", colour = "Resultat")
+
+```
+
+# Sammenhengen mellom ELO og sannsynlighet for å vinne
+
+```{r}
+#Formelen for å beregne sannsynlighet for å vinne spillet for spiller A
+# P(seier_lag_A) = 1 / (1 +10 ^ ((Elo_player_B - Ela_player_A) / 400))
+#kun mulig å beregne der vi har ELO for begge
+
+aoe2_spillanalyse = mutate(aoe2_spillanalyse,
+                           p_seier_mittlag = 1 / (1 +10 ^ ((average_team_elo_motstanderlag - average_team_elo_mitt_lag) / 400))
+                           )
+
+temp = filter(aoe2_spillanalyse, is.nan(p_seier_mittlag) == FALSE)
+
+ggplot(data = temp, aes(x = p_seier_mittlag, y = seier)) +
+  geom_point() +
+  geom_smooth()
+
+ggplot(data = temp) +
+  geom_freqpoly(aes(x = p_seier_mittlag, colour = as.factor(seier)), binwidth = 0.05)
+
+
+modell = lm(data = temp, seier ~ p_seier_mittlag)
+summary(modell)
+
+```
+
+
+# Effektive actions per minute
+
+
+```{r}
+#plotter utviklinga i gjennomsnittlig actions per minute
+temp = select(df_players, name, profile_id, dato, mean_apm) %>%
+  filter(name %in% c("Chilamacho", "Hufsa", "Olas"))
+
+ggplot(data = temp, aes(x = dato, y = mean_apm, colour = name)) +
+  geom_point(alpha = 0.8) +
+  geom_smooth(se = FALSE) +
+  scale_x_datetime(date_breaks = "2 months", limits = c(as.POSIXct("2021-05-16"), as.POSIXct("2022-04-16"))) +
+  labs(title = "Erlend og Ola blir raskere!", subtitle = "Effektive handlinger per minutt, gjennomsnitt", 
+       x = "Dato", y = "Gjennomsnittlig effektive APM", caption = "Data: Aoe2insights.com",
+       colour = "age-navn"
+       )
+
+
+```
+
+# Uptimes
+
+```{r}
+temp = filter(df_uptimes, mitt_lag == 1)
+
+temp = group_by(temp, name, age) %>%
+  summarise(
+    mean_ageup = round(mean(minutes, na.rm = TRUE), 1),
+    median_ageup = round(median(minutes, na.rm = TRUE), 1)
+  )
+
+temp = mutate(temp,
+              age = factor(age),
+              age = fct_relevel(age, "castle", after = 1)
+              ) %>%
+  arrange(age, mean_ageup)
+
+knitr::kable(temp)
+
+ggplot(data = temp) +
+  geom_col(aes(x = age, fill = name, y = mean_ageup), position = "dodge") +
+  labs(y = "Gjennomsnittlig tid til age", fill = "Spiller")
+
+```
+
+
+
+```{r}
+temp = filter(df_uptimes, mitt_lag == 1)
+
+#grid-layout
+ggplot(data = temp, aes(x = minutes)) +
+  geom_histogram(binwidth = 1) +
+  facet_grid(rows = vars(name), cols = vars(age))
+
+#wrap-layout
+ggplot(data = temp, aes(x = minutes, fill = name)) +
+  geom_histogram(binwidth = 1) +
+  facet_wrap(vars(age))
+
+#feudal
+temp = filter(df_uptimes, mitt_lag == 1, age == "feudal")
+
+ggplot(data = temp, aes(x = minutes, colour = name)) +
+  geom_freqpoly(binwidth = 1)
+
+#utvikling over tid?
+temp = filter(df_uptimes, mitt_lag == 1)
+
+ggplot(data = temp, aes(x = dato, y = minutes, colour = name, linetype = age)) +
+  geom_line()
+
+
+```
+
+# Bygde enheter / enheter satt i kø
+
+```{r}
+#antall bygde ryttere
+temp = filter(df_units, unit_name == "Knight") %>%
+  group_by(spill_id, mitt_lag) %>%
+  summarise(antall_riddere = sum(amount)) %>%
+  pivot_wider(names_from = mitt_lag, values_from = antall_riddere, names_prefix = "lag_") %>%
+  rename(
+    motstander = lag_0,
+    oss = lag_1
+  ) %>%
+  left_join(., select(aoe2_spillanalyse, spill_id, seier))
+
+ggplot(data = temp) +
+  geom_point(aes(x = oss, y = motstander, colour = as.factor(seier))) +
+  geom_abline(slope = 1, intercept = 0) +
+  labs(x = "Antall riddertrykk på vårt lag", y = "Antall riddertrykk hos motstander", colour = "Vant vi?")
+
+```

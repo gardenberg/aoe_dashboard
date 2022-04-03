@@ -9,7 +9,19 @@ output:
 Litt forskjellige tall og figurer med uklar relevans for Age of Empires 2.
 
 ```{r setup, include=FALSE}
+#biblioteker
 library(flexdashboard)
+library(tidyverse)
+library(httr)
+library(jsonlite)
+library(readxl)
+library(tidytext)
+
+
+#settings
+tema = theme_set(theme_minimal())
+options(scipen = 99)
+
 
 #intro her: https://pkgs.rstudio.com/flexdashboard/articles/using.html#overview
 
@@ -17,16 +29,121 @@ library(flexdashboard)
 ##antall spill spilt. antall vunnet. 
 ##baner spilt (og vunnet?). 
 ##sivilisasjoner spilt. 
-##varighet på spill. uptimes.
+##varighet på spill. 
+
+##uptimes.
+##ELO-utvikling?
 ##eapm. 
+
+```
+
+```{r, include = FALSE}
+#data
+aoe2_spillanalyse <- read_excel("data/aoe2_spillanalyse.xlsx", 
+                                sheet = "raw", 
+                                col_types = c("numeric","text", "text", "date", "text", "text", "numeric", "text", "numeric"))
+
+aoe2_spillanalyse = 
+  mutate(aoe2_spillanalyse,
+    seier = ifelse(resultat == "seier", 1, 0),
+    varighet_kategori = cut(varighet_min_ingametime, 
+                            breaks = seq(0,max(aoe2_spillanalyse$varighet_min_ingametime)+20, 20))
+  )
+
+#spillerdata
+df_spillere <- read_csv("data/spillerstatistikk.csv",
+                        col_types = cols(spill_id = col_character(),
+                                         profile_id = col_character(), 
+                                         steam_id = col_character()))
+
+df_spillere_insight <- read_delim("data/spillerstatistikk_insight.csv", delim = ";",
+                                           escape_double = FALSE,col_types = cols(id = col_character(), profile_id = col_character(), 
+                                                                                  spill_id = col_character()),
+                                           locale = locale(decimal_mark = ",", grouping_mark = "|"), trim_ws = TRUE)
+
+
+#apm og uptimes
+df_apm <- read_delim("data/apm.csv", delim = ";", escape_double = FALSE, 
+                     col_types = cols(id = col_skip(),
+                                      profile_id = col_character(), 
+                                      spill_id = col_character()),
+                     locale = locale(decimal_mark = ",", grouping_mark = "|"), trim_ws = TRUE)
+
+df_uptimes <- read_delim("data/uptimes.csv", delim = ";", escape_double = FALSE, 
+                         col_types = cols(id = col_skip(),
+                                          spill_id = col_character(), 
+                                          profile_id = col_character()),
+                         locale = locale(decimal_mark = ",", grouping_mark = "|"), trim_ws = TRUE)
+
+#units
+df_units <- read_delim("data/units.csv", delim = ";", escape_double = FALSE, 
+                       col_types = cols(minutes = col_number(),
+                                        spill_id = col_character(), profile_id = col_character()),
+                       trim_ws = TRUE)
+
+
+
+#sjekk om spillerdata finnes for alle spill
+#test = anti_join(aoe2_spillanalyse, df_spillere)
+
+#hvis ikke - last inn 
+
+#bind sammen evt spillerinfo
+
+
+##KONSOLIDER DATASETTENE TIL DET SOM TRENGS HER
+
+#ett datasett med mest info om spillene
+
+#finner average elo (med na.rm = TRUE, dvs for spillere uten NA)
+df_spillere = group_by(df_spillere, spill_id, mitt_lag) %>%
+  mutate(
+    average_team_elo = mean(rating, na.rm = TRUE),
+  )
+
+temp = select(df_spillere, spill_id, mitt_lag, average_team_elo) %>%
+  distinct(spill_id, mitt_lag, .keep_all = TRUE) %>%
+  mutate(mitt_lag = ifelse(mitt_lag == 1, "mitt_lag", "motstanderlag")) %>%
+  pivot_wider(names_from = mitt_lag, names_prefix = "average_team_elo_", values_from = average_team_elo)
+
+aoe2_spillanalyse = left_join(aoe2_spillanalyse, temp)
+
+#ett datasett med mest info om spillerne
+df_players = select(df_spillere, profile_id, steam_id, name, spill_id, mitt_lag, antall_spillere_i_match, rating, won) %>%
+  full_join(., select(df_spillere_insight, profile_id, spill_id, reserve_name = name, color, civilization, civ_id, type, mean_apm)) %>%
+  left_join(.,select(aoe2_spillanalyse, spill_id, spill_nr, dato))
+
+#fikser "Mitt-lav-variabelen" slik at den er 1 for mitt lag, 0 for ikke mitt lag
+#tar kun med Ola, Erlend og meg her - Grautbakken og Stora Denso utgår.
+
+df_players = mutate(df_players,
+                    mitt_lag = ifelse(profile_id %in% c("2176509", "4361967", "4250835"), 1, 0)
+                    )
+
+
+#UPTIMES
+#legger til info om hvorvidt det er på mitt lag eller ikke
+df_uptimes = mutate(df_uptimes,
+  mitt_lag = ifelse(profile_id %in% c("2176509", "4361967", "4250835"), 1, 0)
+)
+#LEGGER også til dato.
+df_uptimes = left_join(df_uptimes, select(aoe2_spillanalyse, spill_id, spill_nr, dato))
+
+#UNITS
+#gjør det samme her
+df_units = mutate(df_units,
+  mitt_lag = ifelse(profile_id %in% c(2176509, 4361967, 4250835), 1, 0)
+)
+#LEGGER også til dato.
+df_units = left_join(df_units, select(aoe2_spillanalyse, spill_id, spill_nr, dato))
 ```
 
 
 ### Hvor mange har vi vunnet?
 
 ```{r}
-spill_spilt = 55
-vunnet = 20
+spill_spilt = nrow(aoe2_spillanalyse)
+vunnet = sum(aoe2_spillanalyse$seier)
 
 gauge(vunnet, min = 0, max = spill_spilt)
 ```
@@ -34,16 +151,126 @@ gauge(vunnet, min = 0, max = spill_spilt)
 > Her ser vi hvor mange av spillene vi har spilt som vi har vunnet. 
 
 
-### Graf 2
+### Hvilke baner har vi spilt - og hvor vinner vi?
 
 ```{r}
+temp = group_by(aoe2_spillanalyse, bane, resultat) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  complete(resultat, bane) %>%
+  group_by(bane) %>%
+  mutate(
+    n = ifelse(is.na(n) == TRUE, 0, n),
+    antall_bane_n = sum(n)
+  )
 
+ggplot(temp) +
+  geom_col(aes(x = fct_reorder(bane, antall_bane_n), y = n, fill = resultat)) +
+  labs(title = "Hvilke kart har vi vunnet på?", x = "Kart", y = "Andel seire") +
+  coord_flip()
 ```
 
 
-### Graf 3
+### Sivilisasjoner spilt?
 
 ```{r}
+temp = filter(df_players, mitt_lag == 1) %>%
+  group_by(name, civilization) %>%
+  summarise(antall = n())
+
+ggplot(data = temp) +
+  geom_col(aes(x = reorder_within(civilization, antall, name), y = antall)) +
+  coord_flip() +
+  scale_x_reordered() +
+  facet_wrap(vars(name), scales = "free_y") +
+  labs(x = "Sivilisasjoner", y = "Antall")
 
 ```
 
+### Hvor lenge varer spillene?
+
+```{r}
+###varighet på spill. uptimes.
+
+#stolpediagram
+temp = count(aoe2_spillanalyse, varighet_kategori)
+
+ggplot(data = temp, aes(x = varighet_kategori, y = n)) +
+  geom_col() +
+  labs(x = "Varighet i spilltid (minutter)", y = "Antall spill", fill = "Resultat", title = "Antall spill etter varighet")
+
+#bedre kategorier:
+#0-15 min (dark age)
+#15-25 min (feudal age)
+#25-30 min (early castle)
+#30-40 min (late castle)
+#40-60 min (imp)
+#60+ (late imp)
+
+#name	age	mean_ageup	median_ageup
+#Chilamacho	feudal	12.6	11.9
+#Hufsa	feudal	13.6	13.2
+#Olas	feudal	13.7	12.9
+
+#Olas	castle	24.0	23.0
+#Chilamacho	castle	24.1	24.0
+#Hufsa	castle	28.5	28.0
+#Olas	imperial	41.6	42.2
+#Hufsa	imperial	46.0	46.9
+#Chilamacho	imperial	46.2	45.4
+
+```
+
+### Når går vi opp i age?
+
+```{r}
+temp = filter(df_uptimes, mitt_lag == 1)
+
+temp = group_by(temp, name, age) %>%
+  summarise(
+    mean_ageup = round(mean(minutes, na.rm = TRUE), 1),
+    median_ageup = round(median(minutes, na.rm = TRUE), 1)
+  )
+
+temp = mutate(temp,
+              age = factor(age),
+              age = fct_relevel(age, "castle", after = 1)
+              ) %>%
+  arrange(age, mean_ageup)
+
+knitr::kable(temp)
+```
+
+
+### Blir vi bedre over tid?
+
+```{r}
+temp = filter(aoe2_spillanalyse, ranked == 1)
+
+ggplot(data = temp, aes(x = dato, y = average_team_elo_mitt_lag)) +
+  geom_point() +
+  geom_smooth() +
+  scale_x_datetime(date_breaks = "6 weeks", limits = c(as.POSIXct("2021-08-16"), as.POSIXct("2022-04-16"))) +
+  labs(title = "Gjennomsnittlig ranked ELO over tid", subtitle = "september 2021 - mars 2022", x = "Dato", y = "Gjennomsnittlig ELO")
+```
+
+
+### Effektive handlinger per minutt!
+
+
+```{r}
+#plotter utviklinga i gjennomsnittlig actions per minute
+temp = select(df_players, name, profile_id, dato, mean_apm) %>%
+  filter(name %in% c("Chilamacho", "Hufsa", "Olas"))
+
+ggplot(data = temp, aes(x = dato, y = mean_apm, colour = name)) +
+  geom_point(alpha = 0.8) +
+  geom_smooth(se = FALSE) +
+  scale_x_datetime(date_breaks = "2 months", limits = c(as.POSIXct("2021-05-16"), as.POSIXct("2022-04-16"))) +
+  labs(title = "Effektive handlinger per minutt, gjennomsnitt", 
+       x = "Dato", y = "Gjennomsnittlig effektive APM", caption = "Data: Aoe2insights.com",
+       colour = "age-navn"
+       )
+
+
+```
