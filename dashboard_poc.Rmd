@@ -6,7 +6,7 @@ output:
     vertical_layout: scroll
 ---
 
-Litt forskjellige tall og figurer med uklar relevans for Age of Empires 2.
+Ullsaulagets tall og figurer med for Age of Empires 2.
 
 ```{r setup, include=FALSE}
 #biblioteker
@@ -80,6 +80,9 @@ df_units <- read_delim("data/units.csv", delim = ";", escape_double = FALSE,
                        col_types = cols(minutes = col_number(),
                                         spill_id = col_character(), profile_id = col_character()),
                        trim_ws = TRUE)
+
+#alle civs
+all_civs <- read_excel("data/all_civs.xlsx")
 
 
 
@@ -166,17 +169,18 @@ temp = group_by(aoe2_spillanalyse, bane, resultat) %>%
 
 ggplot(temp) +
   geom_col(aes(x = fct_reorder(bane, antall_bane_n), y = n, fill = resultat)) +
-  labs(title = "Hvilke kart har vi vunnet på?", x = "Kart", y = "Andel seire") +
+  labs(x = "Kart", y = "Andel seire") +
   coord_flip()
 ```
 
 
-### Sivilisasjoner spilt?
+### Hvilke sivilisasjoner liker vi å spille?
 
 ```{r}
 temp = filter(df_players, mitt_lag == 1) %>%
   group_by(name, civilization) %>%
-  summarise(antall = n())
+  summarise(antall = n()) %>%
+  filter(., is.na(name) == FALSE, is.na(civilization) == FALSE)
 
 ggplot(data = temp) +
   geom_col(aes(x = reorder_within(civilization, antall, name), y = antall)) +
@@ -186,6 +190,32 @@ ggplot(data = temp) +
   labs(x = "Sivilisasjoner", y = "Antall")
 
 ```
+
+### Hvilke sivilisasjoner har vi ikke spilt?
+
+```{r}
+temp = filter(df_players, mitt_lag == 1) %>%
+  group_by(name, civilization) %>%
+  summarise(antall = n()) %>%
+  filter(., is.na(name) == FALSE, is.na(civilization) == FALSE) %>%
+  mutate(har_spilt = ifelse(antall > 0, 1, 0))
+
+test = left_join(all_civs, temp) 
+
+kombinasjoner = expand(test, civilization, name) %>%
+  filter(is.na(name) == FALSE) %>%
+  left_join(., temp) %>%
+  mutate(
+    antall = ifelse(is.na(antall) == TRUE, 0, antall),
+    har_spilt = ifelse(antall > 0, 1, 0)
+  )
+
+ggplot(data = kombinasjoner) +
+  geom_tile(aes(x = name, y = civilization, fill = as.factor(har_spilt))) +
+  labs(x = "Spiller", y = "Sivilisasjon", fill = "Har vi spilt den?")
+
+```
+
 
 ### Hvor lenge varer spillene?
 
@@ -197,7 +227,7 @@ temp = count(aoe2_spillanalyse, varighet_kategori)
 
 ggplot(data = temp, aes(x = varighet_kategori, y = n)) +
   geom_col() +
-  labs(x = "Varighet i spilltid (minutter)", y = "Antall spill", fill = "Resultat", title = "Antall spill etter varighet")
+  labs(x = "Varighet i spilltid (minutter)", y = "Antall spill", fill = "Resultat")
 
 #bedre kategorier:
 #0-15 min (dark age)
@@ -251,7 +281,7 @@ ggplot(data = temp, aes(x = dato, y = average_team_elo_mitt_lag)) +
   geom_point() +
   geom_smooth() +
   scale_x_datetime(date_breaks = "6 weeks", limits = c(as.POSIXct("2021-08-16"), as.POSIXct("2022-04-16"))) +
-  labs(title = "Gjennomsnittlig ranked ELO over tid", subtitle = "september 2021 - mars 2022", x = "Dato", y = "Gjennomsnittlig ELO")
+  labs(x = "Dato", y = "Gjennomsnittlig ELO")
 ```
 
 
@@ -267,8 +297,7 @@ ggplot(data = temp, aes(x = dato, y = mean_apm, colour = name)) +
   geom_point(alpha = 0.8) +
   geom_smooth(se = FALSE) +
   scale_x_datetime(date_breaks = "2 months", limits = c(as.POSIXct("2021-05-16"), as.POSIXct("2022-04-16"))) +
-  labs(title = "Effektive handlinger per minutt, gjennomsnitt", 
-       x = "Dato", y = "Gjennomsnittlig effektive APM", caption = "Data: Aoe2insights.com",
+  labs(x = "Dato", y = "Gjennomsnittlig effektive APM", caption = "Data: Aoe2insights.com",
        colour = "age-navn"
        )
 
