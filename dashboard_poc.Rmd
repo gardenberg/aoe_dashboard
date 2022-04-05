@@ -169,7 +169,7 @@ temp = group_by(aoe2_spillanalyse, bane, resultat) %>%
 
 ggplot(temp) +
   geom_col(aes(x = fct_reorder(bane, antall_bane_n), y = n, fill = resultat)) +
-  labs(x = "Kart", y = "Andel seire") +
+  labs(x = "Kart", y = "Antall kamper", fill  = "Resultat") +
   coord_flip()
 ```
 
@@ -268,7 +268,7 @@ temp = mutate(temp,
               ) %>%
   arrange(age, mean_ageup)
 
-knitr::kable(temp)
+knitr::kable(temp, col.names = c("Alias", "Age", "Gj.snitt ageup", "Median ageup"))
 ```
 
 
