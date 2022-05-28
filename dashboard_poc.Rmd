@@ -6,7 +6,7 @@ output:
     vertical_layout: scroll
 ---
 
-Ullsaulagets tall og figurer for Age of Empires 2. Riktignok uten de 8 tapene fra ligaspillet.
+Ullsaulagets tall og figurer for Age of Empires 2. Riktignok uten de 8 tapene fra ligaspillet - men alt det andre er her!
 
 ```{r setup, include=FALSE}
 #biblioteker
@@ -161,6 +161,7 @@ ligaspill = filter(aoe2_spillanalyse, ranked == 0) %>%
 aoe2_spillanalyse = anti_join(aoe2_spillanalyse, ligaspill)
 df_players = anti_join(df_players, ligaspill)
 df_uptimes = anti_join(df_uptimes, ligaspill)
+df_units = anti_join(df_units, ligaspill)
 
 ```
 
@@ -179,7 +180,7 @@ gauge(vunnet, min = 0, max = spill_spilt,
       )
 ```
 
-> Her ser vi hvor av spillene vi har spilt som vi har vunnet. 
+> Her ser vi hvor mange av spillene vi har vunnet. 
 
 
 ### Hvilke baner har vi spilt - og hvor vinner vi?
@@ -223,7 +224,7 @@ ggplot(data = temp) +
 
 > Franks, Teutons og Bulgarians!
 
-### Hvilke sivilisasjoner har vi ikke spilt?
+### Hvilke sivilisasjoner har vi spilt?
 
 ```{r}
 temp = filter(df_players, mitt_lag == 1) %>%
@@ -245,7 +246,7 @@ kombinasjoner = expand(test, civilization, name) %>%
 ggplot(data = kombinasjoner) +
   geom_tile(aes(x = name, y = civilization, fill = as.factor(har_spilt))) +
   scale_fill_manual(values = c("gold", "grey")) +
-  labs(x = "Spiller", y = "Sivilisasjon", fill = "Har vi spilt sivilisasjonen?")
+  labs(x = "Spiller", y = "Sivilisasjon", fill = NULL)
 
 ```
 
@@ -261,7 +262,8 @@ temp = count(aoe2_spillanalyse, varighet_kategori)
 
 ggplot(data = temp, aes(x = varighet_kategori, y = n)) +
   geom_col() +
-  labs(x = "Varighet i spilltid", y = "Antall spill", fill = "Resultat")
+  labs(x = "Varighet i spilltid", y = "Antall spill", fill = "Resultat") +
+  coord_flip()
 
 #bedre kategorier:
 #0-15 min (dark age)
@@ -344,4 +346,53 @@ ggplot(data = temp, aes(x = dato, y = mean_apm, colour = name)) +
 
 ```
 
-> Effektive APM viser antall faktiske handlinger per minutt.
+> Effektive APM viser antall handlinger per minutt.
+
+
+### Hvilke enheter liker vi best?
+
+
+```{r}
+unit_codes = distinct(df_units, unit_type, unit_name)
+
+temp = filter(df_units, mitt_lag == 1) %>%
+  group_by(name, unit_name) %>%
+  summarise(antall = n()) %>%
+  slice_max(order_by = antall, n = 20) %>%
+  mutate(
+    unit_name = str_replace(unit_name, fixed("Villager (Male)"), "Villager"),
+    unit_name = str_replace(unit_name, fixed("Trade Cart (Empty)"), "Trade Cart"),
+    unit_name = str_replace(unit_name, fixed("Trebuchet (Packed)"), "Trebuchet")
+  )
+
+ggplot(data = temp) +
+  geom_col(aes(x = reorder_within(unit_name, antall, name), y = antall)) +
+  coord_flip() +
+  scale_x_reordered() +
+  facet_wrap(vars(name), scales = "free_y") +
+  labs(x = "Enheter", y = "Antall")
+
+```
+
+> Figuren viser totalt antall enheter vi har forsøkt å bygge, totalt i alle spillene, etter antall forsøkt bygd.  Enhetsnavnene er "basisenheter", som f.eks. millitia er hele millits-linja, inkl. champion og de andre.
+
+### Hvor mange enheter bygger vi per match i snitt?
+
+```{r}
+temp = filter(df_units, mitt_lag == 1, unit_name %in% c("Villager (Male)", "Scout Cavalry", "Knight", "Skirmisher", "Spearman")) %>%
+  group_by(name, unit_name, spill_id) %>%
+  summarise(antall = n()) %>%
+  left_join(., select(aoe2_spillanalyse, spill_id, dato)) %>%
+  mutate(
+    unit_name = str_replace(unit_name, fixed("Villager (Male)"), "Villager")
+  )
+
+ggplot(data = temp) +
+  geom_smooth(aes(x = dato, y = antall, colour = name), se = FALSE) +
+  facet_wrap(vars(unit_name), scales = "free")
+
+```
+
+> Viser gjennomsnittlig antall pr. match av de fem mest bygde enhetene
+
+
