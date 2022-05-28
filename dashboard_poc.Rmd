@@ -1,12 +1,12 @@
 ---
-title: "POC for Age of Empires 2 - dashboard"
+title: "Age of Empires 2 - dashboard"
 output: 
   flexdashboard::flex_dashboard:
     orientation: columns
     vertical_layout: scroll
 ---
 
-Ullsaulagets tall og figurer med for Age of Empires 2.
+Ullsaulagets tall og figurer for Age of Empires 2. Riktignok uten de 8 tapene fra ligaspillet.
 
 ```{r setup, include=FALSE}
 #biblioteker
@@ -47,8 +47,21 @@ aoe2_spillanalyse =
   mutate(aoe2_spillanalyse,
     seier = ifelse(resultat == "seier", 1, 0),
     varighet_kategori = cut(varighet_min_ingametime, 
-                            breaks = seq(0,max(aoe2_spillanalyse$varighet_min_ingametime)+20, 20))
+                            breaks = c(0, 15, 25, 30, 40, 60, max(aoe2_spillanalyse$varighet_min_ingametime)+20),
+                            labels = c("dark age 0-15", "feudal age 15-25", "early castle 25-30", "late castle 30-40", "imp 40-60", "post-imp 60+")
+                            )
   )
+#første kategorisering
+#breaks = seq(0,max(aoe2_spillanalyse$varighet_min_ingametime)+20, 20)
+
+#bedre kategorier:
+#0-15 min (dark age)
+#15-25 min (feudal age)
+#25-30 min (early castle)
+#30-40 min (late castle)
+#40-60 min (imp)
+#60+ (late imp)
+
 
 #spillerdata
 df_spillere <- read_csv("data/spillerstatistikk.csv",
@@ -139,6 +152,16 @@ df_units = mutate(df_units,
 )
 #LEGGER også til dato.
 df_units = left_join(df_units, select(aoe2_spillanalyse, spill_id, spill_nr, dato))
+
+#FJERNER SPILLENE FRA TURNERINGA 
+#dermed er det kun RM Teamgames igjen
+ligaspill = filter(aoe2_spillanalyse, ranked == 0) %>%
+  select(spill_id)
+
+aoe2_spillanalyse = anti_join(aoe2_spillanalyse, ligaspill)
+df_players = anti_join(df_players, ligaspill)
+df_uptimes = anti_join(df_uptimes, ligaspill)
+
 ```
 
 
@@ -148,10 +171,15 @@ df_units = left_join(df_units, select(aoe2_spillanalyse, spill_id, spill_nr, dat
 spill_spilt = nrow(aoe2_spillanalyse)
 vunnet = sum(aoe2_spillanalyse$seier)
 
-gauge(vunnet, min = 0, max = spill_spilt)
+gauge(vunnet, min = 0, max = spill_spilt,
+      gaugeSectors(
+        success = c(round(spill_spilt*0.45, 0),spill_spilt),
+        danger = c(0, round(spill_spilt*0.45, 0))
+      )
+      )
 ```
 
-> Her ser vi hvor mange av spillene vi har spilt som vi har vunnet. 
+> Her ser vi hvor av spillene vi har spilt som vi har vunnet. 
 
 
 ### Hvilke baner har vi spilt - og hvor vinner vi?
@@ -169,10 +197,12 @@ temp = group_by(aoe2_spillanalyse, bane, resultat) %>%
 
 ggplot(temp) +
   geom_col(aes(x = fct_reorder(bane, antall_bane_n), y = n, fill = resultat)) +
+  scale_fill_manual(values = c("darkgreen", "red")) +
   labs(x = "Kart", y = "Antall kamper", fill  = "Resultat") +
   coord_flip()
 ```
 
+> Arena, Arabia og Black forest er de banene vi har spilt mest. Stort forbedringspotensiale på Arena!
 
 ### Hvilke sivilisasjoner liker vi å spille?
 
@@ -191,6 +221,8 @@ ggplot(data = temp) +
 
 ```
 
+> Franks, Teutons og Bulgarians!
+
 ### Hvilke sivilisasjoner har vi ikke spilt?
 
 ```{r}
@@ -207,15 +239,17 @@ kombinasjoner = expand(test, civilization, name) %>%
   left_join(., temp) %>%
   mutate(
     antall = ifelse(is.na(antall) == TRUE, 0, antall),
-    har_spilt = ifelse(antall > 0, 1, 0)
+    har_spilt = ifelse(antall > 0, "Ja", "Nei")
   )
 
 ggplot(data = kombinasjoner) +
   geom_tile(aes(x = name, y = civilization, fill = as.factor(har_spilt))) +
-  labs(x = "Spiller", y = "Sivilisasjon", fill = "Har vi spilt den?")
+  scale_fill_manual(values = c("gold", "grey")) +
+  labs(x = "Spiller", y = "Sivilisasjon", fill = "Har vi spilt sivilisasjonen?")
 
 ```
 
+> Mange igjen å prøve enda.
 
 ### Hvor lenge varer spillene?
 
@@ -227,7 +261,7 @@ temp = count(aoe2_spillanalyse, varighet_kategori)
 
 ggplot(data = temp, aes(x = varighet_kategori, y = n)) +
   geom_col() +
-  labs(x = "Varighet i spilltid (minutter)", y = "Antall spill", fill = "Resultat")
+  labs(x = "Varighet i spilltid", y = "Antall spill", fill = "Resultat")
 
 #bedre kategorier:
 #0-15 min (dark age)
@@ -245,11 +279,14 @@ ggplot(data = temp, aes(x = varighet_kategori, y = n)) +
 #Olas	castle	24.0	23.0
 #Chilamacho	castle	24.1	24.0
 #Hufsa	castle	28.5	28.0
+
 #Olas	imperial	41.6	42.2
 #Hufsa	imperial	46.0	46.9
 #Chilamacho	imperial	46.2	45.4
 
 ```
+
+> Antall spill etter hvor lenge de varer, i grove kategorier av "age" - post-imp-kamper på over 1 time er definitivt mest vanlig. 
 
 ### Når går vi opp i age?
 
@@ -271,6 +308,8 @@ temp = mutate(temp,
 knitr::kable(temp, col.names = c("Alias", "Age", "Gj.snitt ageup", "Median ageup"))
 ```
 
+> Hvor lang (ingame-) tid bruker vi til å gå til neste age? 
+
 
 ### Blir vi bedre over tid?
 
@@ -280,10 +319,11 @@ temp = filter(aoe2_spillanalyse, ranked == 1)
 ggplot(data = temp, aes(x = dato, y = average_team_elo_mitt_lag)) +
   geom_point() +
   geom_smooth() +
-  scale_x_datetime(date_breaks = "6 weeks", limits = c(as.POSIXct("2021-08-16"), as.POSIXct("2022-04-16"))) +
+  scale_x_datetime(date_breaks = "6 weeks", limits = c(as.POSIXct("2021-08-16"), as.POSIXct("2022-06-16"))) +
   labs(x = "Dato", y = "Gjennomsnittlig ELO")
 ```
 
+> Lagets gjennomsnittlige TG-ELO, over tid.
 
 ### Effektive handlinger per minutt!
 
@@ -296,10 +336,12 @@ temp = select(df_players, name, profile_id, dato, mean_apm) %>%
 ggplot(data = temp, aes(x = dato, y = mean_apm, colour = name)) +
   geom_point(alpha = 0.8) +
   geom_smooth(se = FALSE) +
-  scale_x_datetime(date_breaks = "2 months", limits = c(as.POSIXct("2021-05-16"), as.POSIXct("2022-04-16"))) +
+  scale_x_datetime(date_breaks = "2 months", limits = c(as.POSIXct("2021-05-16"), as.POSIXct("2022-06-16"))) +
   labs(x = "Dato", y = "Gjennomsnittlig effektive APM", caption = "Data: Aoe2insights.com",
        colour = "age-navn"
        )
 
 
 ```
+
+> Effektive APM viser antall faktiske handlinger per minutt.

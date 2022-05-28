@@ -86,8 +86,6 @@ write.csv(df_spillere, "data/spillerstatistikk.csv", row.names = FALSE)
 ```
 
 ```{r}
-
-```{r}
 #for-loopen er ikke spesielt bra
 #det er noe som blokkerer automatisk henting av data her, og gir meg
 #masse 403-feil. om det er en blokk, eller noe i systemet som hindrer
@@ -116,11 +114,11 @@ test = filter(test, !(spill_id %in% existing_files))
 #henter data
 #manuelt^^
 
-i = 10
+i = 12
+test$spill_id[i]
 
-create_analysis = GET(paste0("https://www.aoe2insights.com/match/", test$spill_id[i], "/analyze/"))
-
-status_code(create_analysis)
+#create_analysis = GET(paste0("https://www.aoe2insights.com/match/", test$spill_id[i], "/analyze/"))
+#status_code(create_analysis)
 
 analysis_url = paste0(
     "https://aoe2insights.s3.amazonaws.com/media/public/matches/analysis/analysis-", 
